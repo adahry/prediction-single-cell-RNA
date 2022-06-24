@@ -1,0 +1,272 @@
+---
+---
+---
+
+***Projekt 2***
+
+**Ada Hryniewicka**
+
+*1. Eksporacja*
+
+a)  Wczytanie danych
+
+```{r}
+X_train <- read.csv('/Users/ads/Desktop/SAD/projekt2/1/X_train.csv', header = TRUE)
+X_test <- read.csv('/Users/ads/Desktop/SAD/projekt2/1/X_test.csv', header = TRUE)
+y_train <- read.csv('/Users/ads/Desktop/SAD/projekt2/1/y_train.csv', header = TRUE)
+```
+
+Sprawdzenie ilości obseracji i zmiennych w danych.
+
+```{r}
+dim(X_train)
+dim(X_test)
+dim(y_train)
+```
+
+Zbiór treningowy objaśniający objaśniany składa się z 3794 obseracji (w tym przypadku ilość komórek) oraz z 9000 wartości (genów). Natomiast zbiór treningowy objaśniany składa się z z 3794 obseracji i 1 wartości. Zbiór testowy objaśniający ma 670 oberwacji i 9000 wartości. Wymiary macierzy są sensowne, jednak należy poddać je sprawdzeniu w kierunku braków danych.
+
+```{r}
+sum(is.na(X_train))
+sum(is.na(X_test))
+sum(is.na(y_train))
+```
+
+```{r}
+summary(unique(colnames(X_train)))
+summary(unique(colnames(X_test)))
+summary(unique(colnames(y_train)))
+#str() daje pełną informację o danych w każdym wierszu, jednak ze względu na estetykę raportu zostało zakomentowane
+#str(X_test)
+#str(y_train)
+```
+
+Dane są kompletne i w kolumnach zawierają się dane numeryczne.
+
+b)  Rozkład empiryczny zmiennej objaśnianej.
+
+Podstawowe statystyki:
+
+```{r}
+cat("Srednia:", mean(y_train$CD36))
+cat("\nMediana:", median(y_train$CD36))
+
+cat("\nOdchylenie standardowe:", sd(y_train$CD36))
+
+cat("\nKwantyle:\n")
+quantile(y_train$CD36, c(0.1, 0.25, 0.5, 0.75, 0.9))
+```
+
+Histogram:
+
+```{r}
+colnames(y_train)
+hist(y_train$CD36)
+```
+
+Po histogramie widać, że zdecydowanie nie mamy do czynienia z rozkładem normalnym, a większość danych skupiona jest wokół wartości 0.
+
+Dystrybuanta empiryczna:
+
+```{r}
+plot(ecdf(y_train$CD36), las=1)
+```
+Ze względów na czytelność wyników na wykresie pokazane zostało 100 najbardziej skorelowanych zmiennych. Liczbą tą można manipulować zmieniając wartość w wierszu 78. 
+```{r fig.width = 20, fig.height=20}
+library(data.table)
+corMatrix <- cor(X_train, y_train$CD36)
+ordered<-setDT(melt(corMatrix))[order(value)][c(0:100)] #w tym miejscu można zmienić wartość top genów branych do macierzy korelacji 
+top250<-ordered$Var1
+
+cormat <- round(cor(X_train[c(top250)]),2)
+library(reshape2)
+melted_cormat <- melt(cormat)
+head(melted_cormat)
+library(ggplot2)
+#opcja umożliwiająca zapis wykresu
+#png(filename="cor_heatmap.png", width=600, height=600)
+ggplot(data=melted_cormat,aes(x = Var1, y = Var2, fill = value )) + geom_tile() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=15), axis.text = element_text(size=15), axis.title=element_text(size=0,face="bold"),legend.text = element_text(size=15),legend.title = element_text(size=20))
+```
+
+
+
+*2. ElasticNet*
+
+a)  Regresja grzbietowa i lasso służa do zapobiegania przetrenowania danych. Różnią się one sposobem dodawania biasu- tworzenia nowej lekko zaburzonej funkcji regresji, aby zmniejszyć wariancję. Regresja lasso może ściągnąć prosta do 0, nastomiast regresja grzbietowa może to zrobić tylko asympotycznie do 0, nie osiągając tej wartości. Dlatego lasso jest lepsze dla modeli w których jest więcej wartości, które są nieużyteczne dla modelu, bo funkcja je wyzeruje. Gdy mamy dużo parametrów i nie wiemy, czy będą przydatne, czy nie można zastosować model ElasticNet. ElasticNet łączy składniki kary z modelu regresji grzbietowej(L2) oraz z modelu lasso (L1). Kiedy alfa jest równa 0 mamy regresje grzbietową, a jeśli jest równa 1 mamy model lasso. Parametr lambda jest współczynnikiem ściągającym.
+
+b)  Przygotowanie danych pod metodę ElasticNet oraz wybranie siatki parametrów. Hiperparametrami w przypadu tej funkcji jest alfa i lambda. Dodatkowo dokonany został podział dancych na walidacyjne i treningowe. 
+
+```{r}
+library(glmnet)
+library(caret)
+set.seed(42)
+
+
+X <- as.matrix(X_train)
+#skalowanie jednak w tym przypadku psuło wyniki dla przewidywań z kaggle, ale znacznie poprawiało szybkość trenowania lasów
+#X <- scale(X) 
+
+n<-nrow(X_train)
+train_rows <- sample(1:n, .9*n)
+x.train <- X[train_rows, ]
+x.test <- X[-train_rows, ]
+
+
+Y <- as.matrix(y_train)
+#Y <- scale(Y)
+
+y.train <- Y[train_rows]
+y.test <- Y[-train_rows]
+
+```
+
+#Elastic_Net_1
+
+W metodzie ElasticNet zastosowane zostały dwa rodzaje podejśc 1, z lambda dobieraną przez model, gdzie zakres alf jest narzucony przez badacza. Natomiast drugie podejście zakładało narzucenie przez badacza obu wartości parametrów. 
+
+```{r}
+set.seed(42)
+alphalist <- seq(0,1,by=0.1)
+
+elasticnet <- lapply(alphalist, function(a){
+  cv.glmnet(x.train, y.train, alpha=a, family="gaussian", type.measure ='mse', nfolds=10 )
+})
+
+results<-data.frame()
+for (i in 1:11) {
+  temp <- data.frame(alpha=(i-1)/10,cvm=min(elasticnet[[i]]$cvm), lambda=min(elasticnet[[i]]$lambda.1se))
+  results <- rbind(results, temp)
+  }
+results
+```
+
+Parametr dotyczący ilości foldów został wybrany jako 10. Zapewnia on wystarczającą ilość, aby ocenić błąd i nie jest obciążający czasowo.
+
+Najniższy błąd jest dla alfa równego 0.4.
+Walidacja krzyżowa modelu oraz dodatkowe sprawdzenie RMSE modelu dla danych testowych niebiorących udziału w walidacji.
+
+```{r}
+set.seed(42)
+alpha03.fit<- cv.glmnet(x.train,y.train, type.measure='mse', alpha=0.4, family='gaussian', nfolds=10)
+alpha03.predicted<- predict(alpha03.fit, s=alpha03.fit$lambda.1se, newx=x.test)
+cat("\nRMSE:")
+mean((y.test-alpha03.predicted)^2)
+```
+
+#Elastic_Net_2
+Drugie podejście z wybranymi parametrami alfa i lambda, sprawdzonymi przy pomocy walidacji krzyżowej (k=10). Zwiększono liczbę walidacji, aby poprawić jakóść modelu.
+
+```{r}
+set.seed(42)
+custom <- trainControl(method = "cv",number = 10)
+
+
+en <- train(x.train,
+            y.train,
+            method='glmnet',
+            tuneGrid =expand.grid(alpha=c(0,0.1,0.4,0.7,1),
+            lambda = c(0,0.1,0.3,0.4,0.5)),
+            trControl=custom)
+en
+cat('\nBłąd walidacyjny (uśredniony) wyniósł:')
+mean(en$resample$RMSE)
+```
+
+
+```{r}
+final.pred <- predict(en, as.data.frame(x.test))
+final.error <- mean((y.test - final.pred)^2)
+cat('\nBłąd testowy:')
+final.error
+```
+
+*3. Lasy losowe*
+
+Hiperparametrami wybieranymi w tym modelu są ntree- liczba drzew i mtry-ilość zmiennych losowo samplowanych jako kandydaci na każdy podział. Dodatkowym sposobem na wybór lepszych parametrów do modelu zastosowango funkcje tuneRF, która wybiera najlepszą wartość mtry, dzięki czemu zamiast wybierać tę wartość samemu wykorzystano te funkcję. Pozwoliło to również oszczędzić obliczeń dla modeli o podanych parametrach mtry przez badacza.
+
+```{r}
+library(caTools)
+library(randomForest)
+
+bestmtry <- tuneRF(x.train, y.train, stepFactor=5, improve=1e-3)
+print(bestmtry)
+
+```
+
+Dodatkowo trenowanie dla siatki parametrów składających się z różnych wartości. Dla większych wartości parametru nTree drzewo ma mniejszy błąd. Organiczenie ilóści drzew w tym wypadku spowodowane jest ograniczeniami sprzętowymi.
+
+```{r}
+mtry<-3000
+treelist <- c(1,5,10)
+control <- trainControl(method="cv", number=5)
+tunegrid <- expand.grid(.mtry=mtry)
+
+tree_search<-lapply(treelist, function(a){
+rf_gridsearch <- train(x.train,y.train  ,method="rf", tuneGrid=tunegrid, trControl=control, ntree=a)
+print(rf_gridsearch)})
+
+
+
+```
+
+Model z wybranymi najlepszymi parametram został wytrenowany na k=10, tak jak w przypadku ElasticNet.
+```{r}
+control <- trainControl(method="cv", number=10)
+mtry <- 3000 #wartość z funkcji tune RF
+tunegrid <- expand.grid(.mtry=mtry)
+rf_best <- train(x.train,y.train ,method="rf", tuneGrid=tunegrid, trControl=control, ntree=10)
+print(rf_best)
+```
+
+```{r}
+p<-predict(rf_best, x.test)
+sqrt(mean((y.test-p)^2))
+```
+
+
+Model referencyjny dla ElasticNet.
+
+```{r}
+set.seed(42)
+predictions <- predict(en, x.test)
+cat('\nRMSE dla modelu referencyjnego ElasticNet:')
+sqrt(mean((mean(y_train$CD36) - predictions)^2))
+```
+
+Model referencyjny dla Regression Tree.
+
+```{r}
+set.seed(42)
+predictions_tree <- predict(rf_best, x.test)
+cat('\nRMSE dla modelu referencyjnego Regression Tree:')
+sqrt(mean((mean(y_train$CD36) - predictions_tree)^2))
+```
+
+Tabela podsumuwująca wyniki ze wszystkich modeli, gdzie porównane są wartości RMSE w każdym etapie walidacji krzyżowej.
+ 
+```{r}
+comp_table<-merge(en$resample, rf_best$resample, by='Resample', all.x=FALSE)
+comp_table<-comp_table[c('Resample', 'RMSE.x', 'RMSE.y')]
+colnames(comp_table) <- c('Sample', 'ElasticNet', 'Tree')
+comp_table
+```
+
+
+*4. Predykcja na zbiorze testowym*
+
+Ze względu na wyniki osiągnięte w poprzednich podpunktach oraz wydajność obliczeniową wybrany został model ElasticNet, który dla danych zakresów parametrów wybrał optymalne i został poddany walidacji krzyżowej o parametrze k=10. 
+
+```{r}
+
+predictions_final<- predict(en, as.data.frame(X_test))
+predictions_final<-as.data.frame(predictions_final)
+predictions_final$Id <- 0:(nrow(predictions_final)-1)
+colnames(predictions_final) <- c('Expected', 'Id')
+predictions_final <- as.data.frame(predictions_final[, c(2,1)])
+write.csv(predictions_final,"/Users/ads/Desktop/SAD/projekt2/pred_1.csv", row.names = FALSE)
+
+```
+
+
+
+
